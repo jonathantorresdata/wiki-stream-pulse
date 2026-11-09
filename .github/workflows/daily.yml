@@ -1,0 +1,44 @@
+name: Daily stream snapshot
+
+# Once a day: consume the live stream for 10 minutes, build the models, run the
+# quality checks and publish the report. A failed check fails the run and the
+# page is not updated.
+on:
+  schedule:
+    - cron: "41 12 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes to consume"
+        default: "10"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-stream
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run.py --minutes "${{ inputs.minutes || '10' }}"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
