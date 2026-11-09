@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wiki Stream Pulse</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a live-ops board: four counters, the stream over time, then who and what */
+:root { --bg:#0f1115; --surface:#171a20; --fg:#e8e6e1; --muted:#9097a1; --line:#272b33; --people:#5fb3f0; --bots:#f0a35f; --accent:#7ad3b0;
+  --display:"Space Grotesk","Segoe UI",system-ui,sans-serif; --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif; --mono:"IBM Plex Mono",Consolas,monospace; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 32px max(16px, env(safe-area-inset-right)) 64px max(16px, env(safe-area-inset-left)); display: grid; gap: 26px; }
+h1, h2 { font-family: var(--display); margin: 0; line-height: 1.12; text-wrap: balance; }
+h1 { font-size: clamp(32px, 6vw, 54px); } h2 { font-size: 22px; }
+p { margin: 0; max-width: 72ch; }
+.kicker { font: 600 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.lead { color: var(--muted); font-size: 18px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 4px; }
+.stat b { font: 700 30px var(--display); font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: 14px; }
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; height: 340px; position: relative; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 16px; min-width: 0; }
+.list table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.list td { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.list tr:last-child td { border-bottom: 0; }
+.list td.n { text-align: right; font-family: var(--mono); color: var(--muted); white-space: nowrap; padding-left: 12px; }
+.list td.t { overflow-wrap: anywhere; }
+section { display: grid; gap: 10px; }
+.note { color: var(--muted); font-size: 14px; }
+footer { border-top: 1px solid var(--line); padding-top: 14px; color: var(--muted); font-size: 14px; display: grid; gap: 6px; }
+a { color: var(--people); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header style="display:grid;gap:10px">
+    <span class="kicker">Wiki Stream Pulse · live consumer of Wikimedia EventStreams</span>
+    <h1>What is the world editing on Wikipedia right now?</h1>
+    <p class="lead" id="lead"></p>
+  </header>
+  <div class="stats" id="stats"></div>
+  <section>
+    <h2>The stream, minute by minute</h2>
+    <p class="note">Changes per minute by event time, people and bots stacked. Partial first and last minutes are left out.</p>
+    <div class="chart"><canvas id="c-min"></canvas></div>
+  </section>
+  <div class="two">
+    <section><h2>Busiest wikis</h2><div class="list" id="wikis"></div></section>
+    <section><h2>Most edited on Spanish Wikipedia</h2><div class="list" id="es"></div></section>
+  </div>
+  <footer>
+    <span id="span"></span>
+    <span>Pipeline: SSE consumer with resumable Kafka offsets → micro-batches to bronze (NDJSON) → DuckDB silver (deduplicated) and gold (event-time windows) → quality checks → this page.</span>
+    <span>Data: <a href="https://stream.wikimedia.org/">Wikimedia EventStreams</a> (CC BY-SA). Source code: <a href="https://github.com/jonathantorresdata/wiki-stream-pulse">github.com/jonathantorresdata/wiki-stream-pulse</a>.</span>
+  </footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const D = __DATA__;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+Chart.defaults.color = css('--muted'); Chart.defaults.borderColor = css('--line'); Chart.defaults.maintainAspectRatio = false;
+const nf = v => Number(v).toLocaleString('en-GB');
+const perMin = D.minutes.length ? Math.round(D.minutes.reduce((s, m) => s + m.events, 0) / D.minutes.length) : 0;
+document.getElementById('lead').textContent = `${nf(D.run.silver_rows)} changes from ${D.span.wikis} wikis between ${D.span.from} and ${D.span.to} UTC: about ${nf(perMin)} per minute, ${D.span.bot_pct}% of them made by bots.`;
+const stats = [[nf(perMin), 'changes per minute'], [D.span.bot_pct + '%', 'made by bots'],
+  [D.lag.p50_seconds + ' s', `median delay from edit to arrival (p95 ${D.lag.p95_seconds} s)`], [nf(D.run.duplicates_removed), 'duplicate deliveries removed']];
+document.getElementById('stats').innerHTML = stats.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+new Chart(document.getElementById('c-min'), { type: 'bar',
+  data: { labels: D.minutes.map(m => m.minute), datasets: [
+    { label: 'people', data: D.minutes.map(m => m.by_people), backgroundColor: css('--people'), stack: 's' },
+    { label: 'bots', data: D.minutes.map(m => m.by_bots), backgroundColor: css('--bots'), stack: 's' }] },
+  options: { scales: { x: { stacked: true }, y: { stacked: true } } } });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+document.getElementById('wikis').innerHTML = '<table>' + D.wikis.map(w => `<tr><td class="t">${esc(w.wiki)}</td><td class="n">${nf(w.events)} · ${w.bot_pct}% bots</td></tr>`).join('') + '</table>';
+document.getElementById('es').innerHTML = D.es.length ? '<table>' + D.es.map(a => `<tr><td class="t">${esc(a.title)}</td><td class="n">${a.edits} edit${a.edits > 1 ? 's' : ''} · ${a.editors} editor${a.editors > 1 ? 's' : ''}</td></tr>`).join('') + '</table>' : '<p class="note">No human edits on Spanish Wikipedia in this window.</p>';
+document.getElementById('span').textContent = `Built ${D.built_at}. ${nf(D.run.bronze_rows)} raw events in bronze, ${nf(D.run.silver_rows)} after deduplication; ${nf(D.lag.late_events)} arrived more than 60 s late.`;
+</script>
+</body>
+</html>
